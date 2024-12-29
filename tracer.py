@@ -1,5 +1,7 @@
-import numpy as np
-import png
+import argparse
+import jax.numpy as np
+import numpy as onp
+from PIL import Image
 import time
 from tqdm import trange
 
@@ -23,8 +25,7 @@ SENSOR_WIDTH = 0.036
 # 25mm focal lenth
 FOCAL_LENGTH = 0.025
 
-# Image resolution and camera position
-W, H = RES = (1024, 768)
+# Camera position
 CAMERA_POS = np.array([0.0, -1.5e11, 5e9])
 
 
@@ -34,8 +35,14 @@ def unit(vecs):
 
 
 class Camera:
-    def __init__(self, res = RES, pos = CAMERA_POS, focal_length = FOCAL_LENGTH, \
-                 subject_pos = BH_POS, rotation = np.pi/16):
+    def __init__(
+        self,
+        res,
+        pos=CAMERA_POS,
+        focal_length=FOCAL_LENGTH,
+        subject_pos=BH_POS,
+        rotation=np.pi / 16,
+    ):
         self.res = res
         self.pos = pos
         self.focal_length = focal_length
@@ -52,20 +59,29 @@ class Camera:
         rz = -np.arctan(pos_x / pos_y)
         ry = self.rotation
 
-        Rx = np.array([
-            [1.0, 0.0, 0.0],
-            [0.0, np.cos(rx), -np.sin(rx)],
-            [0.0, np.sin(rx), np.cos(rx)]])
+        Rx = np.array(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, np.cos(rx), -np.sin(rx)],
+                [0.0, np.sin(rx), np.cos(rx)],
+            ]
+        )
 
-        Ry = np.array([
-            [np.cos(ry), 0.0, np.sin(ry)],
-            [0.0, 1.0, 0.0],
-            [-np.sin(ry), 0.0, np.cos(ry)]])
+        Ry = np.array(
+            [
+                [np.cos(ry), 0.0, np.sin(ry)],
+                [0.0, 1.0, 0.0],
+                [-np.sin(ry), 0.0, np.cos(ry)],
+            ]
+        )
 
-        Rz = np.array([
-            [np.cos(rz), -np.sin(rz), 0.0],
-            [np.sin(rz), np.cos(rz), 0.0],
-            [0.0, 0.0, 1.0]])
+        Rz = np.array(
+            [
+                [np.cos(rz), -np.sin(rz), 0.0],
+                [np.sin(rz), np.cos(rz), 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
 
         R = np.matmul(np.matmul(Rz, Ry), Rx)
 
@@ -85,8 +101,8 @@ class Camera:
         # Initiate a ray through each pixel of the image
         for i in range(res_h):
             for j in range(res_w):
-                dx = (j - float(res_w)/2) * scale_ratio
-                dz = (i - float(res_h)/2) * scale_ratio
+                dx = (j - float(res_w) / 2) * scale_ratio
+                dz = (i - float(res_h) / 2) * scale_ratio
                 vels.append([dx, self.focal_length, dz])
 
         avels = np.array(vels)
@@ -96,13 +112,14 @@ class Camera:
 
         # Rotate rays to world coordinate frame
         avels = self.rotate_vels(avels)
-        apos = np.repeat([self.pos], len(vels), axis=0)
+        apos = np.repeat(self.pos.reshape(1, -1), len(vels), axis=0)
 
         return (apos, avels)
 
 
 class Tracer:
-    def __init__(self, outpath):
+    def __init__(self, cam, outpath):
+        self.cam = cam
         self.outpath = outpath
 
     def tick(self, rays):
@@ -133,14 +150,16 @@ class Tracer:
         """
         # Detect rays that have crossed the x / y plane
         crossed_xy_plane = np.logical_or(
-            np.logical_and(pos[:,2] > 0, new_pos[:,2] < 0),
-            np.logical_and(pos[:,2] < 0, new_pos[:,2] > 0))
+            np.logical_and(pos[:, 2] > 0, new_pos[:, 2] < 0),
+            np.logical_and(pos[:, 2] < 0, new_pos[:, 2] > 0),
+        )
 
         # Detect rays that have crossed into a cylinder defined by the
         # accretion disc inner and outer radius
         crossed_disc_column = np.logical_and(
-            np.linalg.norm(pos[:,:2], axis=1) > DISC_INNER_R,
-            np.linalg.norm(pos[:,:2], axis=1) < DISC_OUTER_R)
+            np.linalg.norm(pos[:, :2], axis=1) > DISC_INNER_R,
+            np.linalg.norm(pos[:, :2], axis=1) < DISC_OUTER_R,
+        )
 
         return np.logical_and(crossed_xy_plane, crossed_disc_column)
 
@@ -148,19 +167,14 @@ class Tracer:
         """Produce an image where the pixels corresponding to rays that have collided with the
         accretion disc are white.
         """
-        return np.flip(collisions.reshape((H, W)), axis=0).astype(np.uint8) * 254
+        w, h = self.cam.res
+        return np.flip(collisions.reshape((h, w)), axis=0).astype(np.uint8) * 254
 
-    def write_image(self, image):
-        """Write the image to the output path."""
-        with open(self.outpath, "wb") as outFile:
-            writer = png.Writer(W, H, greyscale=True, bitdepth=8)
-            writer.write(outFile, image)
-
-    def run(self, cam, max_iter=100):
+    def run(self, max_iter=100):
         """Run the main tracer loop."""
-        pos, vels = cam.click()
+        pos, vels = self.cam.click()
 
-        collisions = np.repeat([False], len(pos))
+        collisions = np.repeat(False, len(pos))
 
         for n in trange(max_iter):
             new_pos, new_vels = self.tick((pos, vels))
@@ -172,13 +186,23 @@ class Tracer:
             pos, vels = new_pos, new_vels
             time.sleep(0.01)
 
-        image = self.render_image(collisions)
-        self.write_image(image)
+        w, h = self.cam.res
+        image = Image.fromarray(onp.array(self.render_image(collisions)))
+        image = image.resize((w * 2, h * 2), Image.Resampling.LANCZOS)
+        image = image.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
+        image.save(self.outpath)
 
         return image
 
 
 if __name__ == "__main__":
-    cam = Camera()
-    tracer = Tracer("out.png")
-    tracer.run(cam, max_iter=800)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-o", "--output-path", default="out.png")
+    parser.add_argument("-x", "--width", type=int, default=4096)
+    parser.add_argument("-y", "--height", type=int, default=3072)
+    parser.add_argument("-i", "--max-iter", type=int, default=2048)
+    args = parser.parse_args()
+
+    cam = Camera(res=(args.width, args.height))
+    tracer = Tracer(cam, args.output_path)
+    tracer.run(max_iter=args.max_iter)

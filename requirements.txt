@@ -1,3 +1,4 @@
+jax
 numpy
-pypng
+PIL
 tqdm
