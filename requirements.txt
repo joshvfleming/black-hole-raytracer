@@ -1,4 +1,4 @@
 jax
 numpy
-PIL
+Pillow
 tqdm
