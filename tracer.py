@@ -30,7 +30,7 @@ SENSOR_WIDTH = 0.036
 FOCAL_LENGTH = 0.025
 
 # Camera position
-CAMERA_POS = np.array([0.0, -1.5e11, 5e9])
+CAMERA_POS = np.array([0.0, -1.5e11, 10e9])
 
 # Random number generator
 RNG_KEY = jr.PRNGKey(0)
