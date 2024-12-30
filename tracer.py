@@ -1,9 +1,12 @@
+"""This module implements a very simple black hole raytracer / simulator"""
+
 import argparse
+import time
+
 import jax.numpy as np
 import jax.random as jr
 import numpy as onp
 from PIL import Image
-import time
 from tqdm import trange
 
 # Physical constants
@@ -18,7 +21,7 @@ S_RADIUS = (2 * G * BH_MASS) / C**2
 
 # Accretion disk size
 DISC_INNER_R = 3 * S_RADIUS
-DISC_OUTER_R = 7 * S_RADIUS
+DISC_OUTER_R = 7.5 * S_RADIUS
 
 # 35mm sensor
 SENSOR_WIDTH = 0.036
@@ -47,6 +50,11 @@ def unit(vecs):
 
 
 class Camera:
+    """The camera class encapsulates attributes of a camera, e.g. its position
+    and focal length, and produces the initial tensor of ray positions and
+    velocities.
+    """
+
     def __init__(
         self,
         res,
@@ -71,7 +79,7 @@ class Camera:
         rz = -np.arctan(pos_x / pos_y)
         ry = self.rotation
 
-        Rx = np.array(
+        rx_mat = np.array(
             [
                 [1.0, 0.0, 0.0],
                 [0.0, np.cos(rx), -np.sin(rx)],
@@ -79,7 +87,7 @@ class Camera:
             ]
         )
 
-        Ry = np.array(
+        ry_mat = np.array(
             [
                 [np.cos(ry), 0.0, np.sin(ry)],
                 [0.0, 1.0, 0.0],
@@ -87,7 +95,7 @@ class Camera:
             ]
         )
 
-        Rz = np.array(
+        rz_mat = np.array(
             [
                 [np.cos(rz), -np.sin(rz), 0.0],
                 [np.sin(rz), np.cos(rz), 0.0],
@@ -95,9 +103,8 @@ class Camera:
             ]
         )
 
-        R = np.matmul(np.matmul(Rz, Ry), Rx)
-
-        return np.matmul(vels, R)
+        r_mat = np.matmul(np.matmul(rz_mat, ry_mat), rx_mat)
+        return np.matmul(vels, r_mat)
 
     def click(self):
         """Click the camera shutter, and return initial position and velocity vectors for all
@@ -130,9 +137,19 @@ class Camera:
 
 
 class Tracer:
-    def __init__(self, cam, outpath):
-        self.cam = cam
+    """The tracer class manages the ray-tracing process."""
+
+    def __init__(self, camera, outpath):
+        self.cam = camera
         self.outpath = outpath
+        self.has_collisions = False
+        self.collision_counts = []
+        self.reset()
+
+    def reset(self):
+        """Reset the state of the tracer."""
+        self.has_collisions = False
+        self.collision_counts = []
 
     def tick(self, rays):
         """Move the rays forward by a single timeslice."""
@@ -159,6 +176,7 @@ class Tracer:
 
         1) crossed the x / y plane and
         2) crossed within a cylinder defined by the inner and outer radius of the disc.
+        3) sampled from a guassian concentrated around the inner side of the disc.
         """
         # Detect rays that have crossed the x / y plane
         crossed_xy_plane = np.logical_or(
@@ -181,13 +199,22 @@ class Tracer:
         disc_dist = DISC_OUTER_R - DISC_INNER_R
         distances = np.clip(distances, 0, disc_dist)
         normalized_distances = distances / disc_dist
-        probabilities = normal(normalized_distances, 0.3)
+        probabilities = normal(normalized_distances, 0.25)
         collision_samples = jr.bernoulli(RNG_KEY, probabilities).astype(bool)
 
         return np.logical_and(
             crossed_xy_plane,
             np.logical_and(crossed_disc_column, collision_samples),
         )
+
+    def should_stop(self):
+        """Stopping criterion for determining when tracing is done."""
+        lookback = 10
+
+        if not self.has_collisions or len(self.collision_counts) < lookback:
+            return False
+
+        return sum(self.collision_counts[-lookback:]) == 0
 
     def render_image(self, collisions):
         """Produce an image where the pixels corresponding to rays that have collided with the
@@ -198,26 +225,42 @@ class Tracer:
         img = (img / img.max()) * 254
         return img.astype(np.uint8)
 
+    def antialias_image(self, image):
+        """Runs an anti-aliasing process on the image"""
+        w, h = self.cam.res
+        image = image.resize((w * 2, h * 2), Image.Resampling.LANCZOS)
+        image = image.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
+        return image
+
     def run(self, max_iter=100):
         """Run the main tracer loop."""
+        self.reset()
         pos, vels = self.cam.click()
 
         collisions = np.repeat(False, len(pos))
 
-        for n in trange(max_iter):
+        i = 0
+        for _ in trange(max_iter):
             new_pos, new_vels = self.tick((pos, vels))
 
             new_collisions = self.detect_collisions(pos, new_pos)
+            self.collision_counts.append(new_collisions.sum())
+
             if np.any(new_collisions):
+                self.has_collisions = True
                 collisions = np.logical_or(collisions, new_collisions)
 
+            if self.should_stop():
+                break
+
             pos, vels = new_pos, new_vels
+            i += 1
             time.sleep(0.01)
 
-        w, h = self.cam.res
+        print(f"Finished in {i} iterations")
+
         image = Image.fromarray(onp.array(self.render_image(collisions)))
-        image = image.resize((w * 2, h * 2), Image.Resampling.LANCZOS)
-        image = image.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
+        image = self.antialias_image(image)
         image.save(self.outpath)
 
         return image
@@ -226,9 +269,9 @@ class Tracer:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-o", "--output-path", default="out.png")
-    parser.add_argument("-x", "--width", type=int, default=4096)
-    parser.add_argument("-y", "--height", type=int, default=3072)
-    parser.add_argument("-i", "--max-iter", type=int, default=2048)
+    parser.add_argument("-x", "--width", type=int, default=1920)
+    parser.add_argument("-y", "--height", type=int, default=1080)
+    parser.add_argument("-i", "--max-iter", type=int, default=1000)
     args = parser.parse_args()
 
     cam = Camera(res=(args.width, args.height))
