@@ -221,9 +221,10 @@ class Tracer:
         accretion disc are white.
         """
         w, h = self.cam.res
-        img = np.flip(collisions.reshape((h, w)), axis=0)
-        img = (img / img.max()) * 254
-        return img.astype(np.uint8)
+        image = np.flip(collisions.reshape((h, w)), axis=0)
+        image = (image / image.max()) * 254
+        image = onp.array(image.astype(np.uint8))
+        return Image.fromarray(image)
 
     def antialias_image(self, image):
         """Runs an anti-aliasing process on the image"""
@@ -259,7 +260,7 @@ class Tracer:
 
         print(f"Finished in {i} iterations")
 
-        image = Image.fromarray(onp.array(self.render_image(collisions)))
+        image = self.render_image(collisions)
         image = self.antialias_image(image)
         image.save(self.outpath)
 
