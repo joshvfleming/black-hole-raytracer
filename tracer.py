@@ -1,7 +1,6 @@
 """This module implements a very simple black hole raytracer / simulator"""
 
 import argparse
-import time
 
 import jax.numpy as np
 import jax.random as jr
@@ -112,26 +111,28 @@ class Camera:
         """
         res_w, res_h = self.res
 
-        vels = []
-
         # For scaling vectors down from image resolution to sensor size
         scale_ratio = SENSOR_WIDTH / res_w
 
         # Initiate a ray through each pixel of the image
-        for i in range(res_h):
-            for j in range(res_w):
-                dx = (j - float(res_w) / 2) * scale_ratio
-                dz = (i - float(res_h) / 2) * scale_ratio
-                vels.append([dx, self.focal_length, dz])
-
-        avels = np.array(vels)
+        j, i = np.meshgrid(np.arange(res_w), np.arange(res_h))
+        dx = (j - float(res_w) / 2) * scale_ratio
+        dz = (i - float(res_h) / 2) * scale_ratio
+        avels = np.stack(
+            [
+                dx.flatten(),
+                np.full(res_w * res_h, self.focal_length),
+                dz.flatten(),
+            ],
+            axis=1,
+        )
 
         # Scale velocities to norm to C
         avels = unit(avels) * C
 
         # Rotate rays to world coordinate frame
         avels = self.rotate_vels(avels)
-        apos = np.repeat(self.pos.reshape(1, -1), len(vels), axis=0)
+        apos = np.repeat(self.pos.reshape(1, -1), len(avels), axis=0)
 
         return (apos, avels)
 
@@ -256,7 +257,6 @@ class Tracer:
 
             pos, vels = new_pos, new_vels
             i += 1
-            time.sleep(0.01)
 
         print(f"Finished in {i} iterations")
 
