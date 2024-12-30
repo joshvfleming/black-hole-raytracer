@@ -1,7 +1,7 @@
 black-hole-raytracer
 ---
 
-I was curious about how light moves around a black hole, so I decided to build a very simple raytracer. This implementation is single-threaded, runs on CPU, and is very slow.
+I was curious about how light moves around a black hole, so I decided to build a very simple raytracer.
 
 <p align="center">
   <img src="out.png" width="960" title="black hole rendering">
