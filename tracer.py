@@ -1,5 +1,6 @@
 import argparse
 import jax.numpy as np
+import jax.random as jr
 import numpy as onp
 from PIL import Image
 import time
@@ -17,7 +18,7 @@ S_RADIUS = (2 * G * BH_MASS) / C**2
 
 # Accretion disk size
 DISC_INNER_R = 3 * S_RADIUS
-DISC_OUTER_R = 6 * S_RADIUS
+DISC_OUTER_R = 7 * S_RADIUS
 
 # 35mm sensor
 SENSOR_WIDTH = 0.036
@@ -27,6 +28,17 @@ FOCAL_LENGTH = 0.025
 
 # Camera position
 CAMERA_POS = np.array([0.0, -1.5e11, 5e9])
+
+# Random number generator
+RNG_KEY = jr.PRNGKey(0)
+
+# Gaussian normalization factor
+SQRT_2_PI = np.sqrt(2 * np.pi)
+
+
+def normal(x, sigma):
+    """Return normal probability for zero-centered x, at sigma"""
+    return 1 / (sigma * SQRT_2_PI) * np.exp(-0.5 * (x**2 / sigma**2))
 
 
 def unit(vecs):
@@ -156,19 +168,35 @@ class Tracer:
 
         # Detect rays that have crossed into a cylinder defined by the
         # accretion disc inner and outer radius
+        distances = np.linalg.norm(new_pos[:, :2], axis=1)
         crossed_disc_column = np.logical_and(
-            np.linalg.norm(pos[:, :2], axis=1) > DISC_INNER_R,
-            np.linalg.norm(pos[:, :2], axis=1) < DISC_OUTER_R,
+            distances > DISC_INNER_R,
+            distances < DISC_OUTER_R,
         )
 
-        return np.logical_and(crossed_xy_plane, crossed_disc_column)
+        # Produce a probability of collision as a function of the distance. This
+        # produces an effect where the mass of the accretion disk is concentrated
+        # around the event horizon
+        distances = distances - DISC_INNER_R
+        disc_dist = DISC_OUTER_R - DISC_INNER_R
+        distances = np.clip(distances, 0, disc_dist)
+        normalized_distances = distances / disc_dist
+        probabilities = normal(normalized_distances, 0.3)
+        collision_samples = jr.bernoulli(RNG_KEY, probabilities).astype(bool)
+
+        return np.logical_and(
+            crossed_xy_plane,
+            np.logical_and(crossed_disc_column, collision_samples),
+        )
 
     def render_image(self, collisions):
         """Produce an image where the pixels corresponding to rays that have collided with the
         accretion disc are white.
         """
         w, h = self.cam.res
-        return np.flip(collisions.reshape((h, w)), axis=0).astype(np.uint8) * 254
+        img = np.flip(collisions.reshape((h, w)), axis=0)
+        img = (img / img.max()) * 254
+        return img.astype(np.uint8)
 
     def run(self, max_iter=100):
         """Run the main tracer loop."""
